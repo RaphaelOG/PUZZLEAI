@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -9,7 +10,10 @@ import {
   Vibration,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import SlidingPuzzle from '../components/SlidingPuzzle';
+import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import PuzzleRenderer from '../components/PuzzleRenderer';
+import { getPuzzleOption } from '../constants/puzzleTypes';
+import { usePuzzleSettings } from '../context/PuzzleSettingsContext';
 import { usePuzzlesSolved } from '../context/PuzzlesSolvedContext';
 
 const ALARM_SOUND_URI =
@@ -20,8 +24,10 @@ function formatTime(date) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function HomeScreen() {
+export default function HomeScreen({ navigation }) {
   const { incrementPuzzlesSolved } = usePuzzlesSolved();
+  const { selectedPuzzleType } = usePuzzleSettings();
+  const activePuzzle = getPuzzleOption(selectedPuzzleType);
   const [alarmActive, setAlarmActive] = useState(false);
   const [flash, setFlash] = useState(false);
   const [puzzleKey, setPuzzleKey] = useState(0);
@@ -46,8 +52,8 @@ export default function HomeScreen() {
         return;
       }
       if (soundRef.current) {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
+        soundRef.current.pause();
+        soundRef.current.remove();
         soundRef.current = null;
       }
     } catch (_) {}
@@ -64,21 +70,17 @@ export default function HomeScreen() {
       return;
     }
     try {
-      const { Audio } = require('expo-av');
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: 'mixWithOthers',
       });
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: ALARM_SOUND_URI },
-        { isLooping: true }
-      );
-      soundRef.current = sound;
-      await sound.playAsync();
+      const player = createAudioPlayer(ALARM_SOUND_URI);
+      player.loop = true;
+      player.play();
+      soundRef.current = player;
     } catch (_) {
-      // Fallback: vibration only if expo-av native module unavailable
+      // Fallback: vibration only if expo-audio is unavailable
     }
   };
 
@@ -118,7 +120,7 @@ export default function HomeScreen() {
 
   const handleStartAlarmTest = () => {
     if (alarmActive) return;
-    
+    triggerAlarm();
   };
 
   const handleSetAlarm = () => {
@@ -150,14 +152,14 @@ export default function HomeScreen() {
     setAlarmTime(d);
   };
 
-  const handlePuzzleSolved = () => {
+  const handlePuzzleSolved = useCallback(() => {
     setAlarmActive(false);
     setPuzzleCompleted(true);
     Vibration.cancel();
     stopAlarmSound();
     incrementPuzzlesSolved();
     Alert.alert('Puzzle completed', 'Nice work! Your alarm is now off.');
-  };
+  }, [incrementPuzzlesSolved]);
 
   useEffect(() => {
     return () => {
@@ -166,11 +168,29 @@ export default function HomeScreen() {
   }, []);
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.header}>
         <Text style={styles.appTitle}>Puzzle🧩 ai</Text>
         <Text style={styles.subtitle}>Alarm that only stops when you solve.</Text>
       </View>
+
+      <TouchableOpacity
+        style={styles.puzzleTypeChip}
+        onPress={() => navigation.navigate('PuzzleOptions')}
+        activeOpacity={0.85}
+        disabled={alarmActive}
+      >
+        <Text style={styles.puzzleTypeEmoji}>{activePuzzle.emoji}</Text>
+        <View style={styles.puzzleTypeInfo}>
+          <Text style={styles.puzzleTypeLabel}>Active puzzle</Text>
+          <Text style={styles.puzzleTypeName}>{activePuzzle.title}</Text>
+        </View>
+        <Text style={styles.puzzleTypeChange}>Change →</Text>
+      </TouchableOpacity>
 
       <View style={[styles.alarmCard, flash && alarmActive && styles.alarmCardActive]}>
         <Text style={styles.alarmLabel}>Alarm status</Text>
@@ -184,7 +204,7 @@ export default function HomeScreen() {
             : 'Idle'}
         </Text>
         <Text style={styles.alarmHint}>
-          Set an alarm time below. When it goes off, solve the 4-number puzzle to stop it.
+          Set an alarm time below. When it goes off, complete your chosen puzzle to stop it.
         </Text>
       </View>
 
@@ -236,12 +256,14 @@ export default function HomeScreen() {
 
       <View style={styles.puzzleSection}>
         <Text style={styles.puzzleTitle}>Wake-up puzzle</Text>
-        <Text style={styles.puzzleDescription}>
-          Slide tiles to order 1–3. When the grid is solved, the alarm stops.
-        </Text>
+        <Text style={styles.puzzleDescription}>{activePuzzle.description}</Text>
         <View style={styles.puzzleWrapper}>
           {alarmActive ? (
-            <SlidingPuzzle key={puzzleKey} onSolved={handlePuzzleSolved} />
+            <PuzzleRenderer
+              key={`${selectedPuzzleType}-${puzzleKey}`}
+              type={selectedPuzzleType}
+              onSolved={handlePuzzleSolved}
+            />
           ) : (
             <Text style={styles.idleText}>
               Set an alarm or tap “Test alarm now” to unlock the puzzle.
@@ -254,7 +276,7 @@ export default function HomeScreen() {
           </Text>
         )}
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -262,11 +284,48 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#020617',
+  },
+  content: {
     paddingHorizontal: 20,
     paddingTop: 50,
+    paddingBottom: 32,
   },
   header: {
-    marginBottom: 20,
+    marginBottom: 16,
+  },
+  puzzleTypeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+  },
+  puzzleTypeEmoji: {
+    fontSize: 28,
+    marginRight: 12,
+  },
+  puzzleTypeInfo: {
+    flex: 1,
+  },
+  puzzleTypeLabel: {
+    color: '#64748b',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  puzzleTypeName: {
+    color: '#f1f5f9',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  puzzleTypeChange: {
+    color: '#22c55e',
+    fontSize: 13,
+    fontWeight: '600',
   },
   appTitle: {
     fontSize: 28,
@@ -346,7 +405,6 @@ const styles = StyleSheet.create({
   },
   puzzleSection: {
     marginTop: 24,
-    flex: 1,
   },
   puzzleTitle: {
     color: '#e5e7eb',
@@ -360,9 +418,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   puzzleWrapper: {
-    flex: 1,
+    minHeight: 280,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 16,
   },
   idleText: {
     color: '#6b7280',

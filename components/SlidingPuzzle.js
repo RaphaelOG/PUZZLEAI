@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
+import { usePuzzleSolved } from './usePuzzleSolved';
 
 const GRID_SIZE = 2;
 const TILE_COUNT = GRID_SIZE * GRID_SIZE;
+const SOLVED_TILES = [1, 2, 3, 0];
 
 function isNeighbor(index, emptyIndex) {
   const row = Math.floor(index / GRID_SIZE);
@@ -16,14 +18,16 @@ function isNeighbor(index, emptyIndex) {
   return (rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1);
 }
 
+function isSolved(tiles) {
+  return tiles.every((value, index) => value === SOLVED_TILES[index]);
+}
+
 function createShuffledTiles() {
-  const solved = Array.from({ length: TILE_COUNT }, (_, i) => i);
-  let tiles = [...solved];
+  let tiles = [...SOLVED_TILES];
   let emptyIndex = tiles.indexOf(0);
 
-  for (let i = 0; i < 30; i += 1) {
+  for (let i = 0; i < 40; i += 1) {
     const neighbors = [];
-
     const row = Math.floor(emptyIndex / GRID_SIZE);
     const col = emptyIndex % GRID_SIZE;
 
@@ -46,18 +50,9 @@ function createShuffledTiles() {
   return tiles;
 }
 
-function isSolved(tiles) {
-  return tiles.every((value, index) => value === index);
-}
-
 export default function SlidingPuzzle({ onSolved }) {
   const [tiles, setTiles] = useState(() => createShuffledTiles());
-
-  useEffect(() => {
-    if (isSolved(tiles)) {
-      onSolved?.();
-    }
-  }, [tiles, onSolved]);
+  const markSolved = usePuzzleSolved(onSolved);
 
   const emptyIndex = useMemo(() => tiles.indexOf(0), [tiles]);
 
@@ -69,6 +64,11 @@ export default function SlidingPuzzle({ onSolved }) {
       const temp = next[index];
       next[index] = next[emptyIndex];
       next[emptyIndex] = temp;
+
+      if (isSolved(next)) {
+        markSolved();
+      }
+
       return next;
     });
   };
@@ -93,7 +93,9 @@ export default function SlidingPuzzle({ onSolved }) {
           );
         })}
       </View>
-      <Text style={styles.helperText}>Slide tiles to order 1–3 with the empty space last.</Text>
+      <Text style={styles.helperText}>
+        Arrange tiles 1 → 2 → 3 with the empty space in the bottom-right.
+      </Text>
     </View>
   );
 }
@@ -133,6 +135,6 @@ const styles = StyleSheet.create({
     color: '#e5e5e5',
     fontSize: 12,
     textAlign: 'center',
+    paddingHorizontal: 12,
   },
 });
-
