@@ -12,7 +12,7 @@ export const PUZZLE_OPTIONS = [
     emoji: '🔢',
     description: 'Slide numbered tiles into order with the empty space in the corner.',
     difficulty: 'Easy',
-    accent: '#22c55e',
+    accent: '#60a5fa',
   },
   {
     id: PUZZLE_TYPES.MATH,
@@ -20,7 +20,7 @@ export const PUZZLE_OPTIONS = [
     emoji: '➕',
     description: 'Solve a quick arithmetic problem to prove you are awake.',
     difficulty: 'Medium',
-    accent: '#38bdf8',
+    accent: '#3b82f6',
   },
   {
     id: PUZZLE_TYPES.SEQUENCE,
@@ -28,7 +28,7 @@ export const PUZZLE_OPTIONS = [
     emoji: '🎨',
     description: 'Watch the color pattern, then repeat it in the same order.',
     difficulty: 'Medium',
-    accent: '#a78bfa',
+    accent: '#2563eb',
   },
   {
     id: PUZZLE_TYPES.WORD,
@@ -36,7 +36,7 @@ export const PUZZLE_OPTIONS = [
     emoji: '🔤',
     description: 'Unscramble the letters to spell a wake-up word.',
     difficulty: 'Hard',
-    accent: '#f97316',
+    accent: '#1d4ed8',
   },
 ];
 

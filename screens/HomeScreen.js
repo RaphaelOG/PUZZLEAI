@@ -8,31 +8,107 @@ import {
   View,
   TouchableOpacity,
   Vibration,
+  Switch,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import ScreenBackground from '../components/ScreenBackground';
+import DashboardCard from '../components/DashboardCard';
+import { PrimaryButton } from '../components/PrimaryButton';
 import PuzzleRenderer from '../components/PuzzleRenderer';
-import { getPuzzleOption } from '../constants/puzzleTypes';
+import { getAlarmSound } from '../constants/alarmSounds';
+import { PUZZLE_OPTIONS, getPuzzleOption } from '../constants/puzzleTypes';
+import { colors, layout, puzzleColors, radii } from '../constants/theme';
 import { usePuzzleSettings } from '../context/PuzzleSettingsContext';
 import { usePuzzlesSolved } from '../context/PuzzlesSolvedContext';
-
-const ALARM_SOUND_URI =
-  'https://assets.mixkit.co/active_storage/sfx/2566-pager-beep.mp3';
+import { playLoopingAlarm, stopAlarm } from '../utils/alarmAudio';
 
 function formatTime(date) {
-  if (!date) return null;
+  if (!date) return '--:--';
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function getNextAlarmOccurrence(alarmTime) {
+  const next = new Date(alarmTime);
+  const now = new Date();
+  while (next <= now) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next;
+}
+
+function getAlarmSubtext(alarmTime) {
+  if (!alarmTime) return 'No alarm set';
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isToday =
+    alarmTime.getDate() === now.getDate() &&
+    alarmTime.getMonth() === now.getMonth() &&
+    alarmTime.getFullYear() === now.getFullYear();
+  const isTomorrow =
+    alarmTime.getDate() === tomorrow.getDate() &&
+    alarmTime.getMonth() === tomorrow.getMonth();
+  const day = alarmTime.toLocaleDateString([], { weekday: 'short' });
+  if (isToday) return `Today, ${day}`;
+  if (isTomorrow) return `Tomorrow, ${day}`;
+  return alarmTime.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function getPuzzleProgress(id, puzzlesSolved, selectedId) {
+  const base = id === selectedId ? puzzlesSolved * 12 : puzzlesSolved * 6;
+  const progress = Math.min(base % 100, 95) + (id === selectedId ? 5 : 0);
+  const level = Math.min(Math.floor(puzzlesSolved / 2) + (id === selectedId ? 2 : 1), 10);
+  return { progress: Math.min(progress, 100), level };
+}
+
+function StatCard({ value, label }) {
+  return (
+    <DashboardCard style={styles.statCard}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </DashboardCard>
+  );
+}
+
+function ProgressRow({ option, progress, level, isActive }) {
+  const accent = puzzleColors[option.id] ?? colors.primary;
+  return (
+    <DashboardCard style={[styles.progressCard, isActive && styles.progressActive]}>
+      <View style={styles.progressHeader}>
+        <View style={[styles.progressIcon, { backgroundColor: accent }]}>
+          <Text style={styles.progressIconText}>{option.title.charAt(0)}</Text>
+        </View>
+        <View style={styles.progressInfo}>
+          <Text style={styles.progressTitle}>{option.title}</Text>
+          <Text style={styles.progressDesc}>{option.difficulty} · {option.description.split(' ').slice(0, 4).join(' ')}…</Text>
+        </View>
+        <Text style={[styles.progressLevel, { color: accent }]}>Lv {level}</Text>
+      </View>
+      <View style={styles.progressBarBg}>
+        <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: accent }]} />
+      </View>
+    </DashboardCard>
+  );
+}
+
 export default function HomeScreen({ navigation }) {
-  const { incrementPuzzlesSolved } = usePuzzlesSolved();
-  const { selectedPuzzleType } = usePuzzleSettings();
+  const { puzzlesSolved, incrementPuzzlesSolved } = usePuzzlesSolved();
+  const { selectedPuzzleType, selectedAlarmSoundId } = usePuzzleSettings();
   const activePuzzle = getPuzzleOption(selectedPuzzleType);
+  const activeAlarmSound = getAlarmSound(selectedAlarmSoundId);
   const [alarmActive, setAlarmActive] = useState(false);
   const [flash, setFlash] = useState(false);
   const [puzzleKey, setPuzzleKey] = useState(0);
   const [puzzleCompleted, setPuzzleCompleted] = useState(false);
   const [alarmTime, setAlarmTime] = useState(null);
+  const [alarmEnabled, setAlarmEnabled] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [pickerValue, setPickerValue] = useState(() => {
     const d = new Date();
@@ -43,55 +119,20 @@ export default function HomeScreen({ navigation }) {
   const soundRef = useRef(null);
   const webAudioRef = useRef(null);
   const checkIntervalRef = useRef(null);
+  const solvedHandledRef = useRef(false);
+  const dismissedUntilRef = useRef(0);
 
-  const stopAlarmSound = async () => {
-    try {
-      if (Platform.OS === 'web' && webAudioRef.current) {
-        webAudioRef.current.pause();
-        webAudioRef.current = null;
-        return;
-      }
-      if (soundRef.current) {
-        soundRef.current.pause();
-        soundRef.current.remove();
-        soundRef.current = null;
-      }
-    } catch (_) {}
-  };
+  const startAlarmSound = useCallback(async () => {
+    await playLoopingAlarm(activeAlarmSound.source, soundRef, webAudioRef);
+  }, [activeAlarmSound.source]);
 
-  const startAlarmSound = async () => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      try {
-        const audio = new window.Audio(ALARM_SOUND_URI);
-        audio.loop = true;
-        await audio.play();
-        webAudioRef.current = audio;
-      } catch (_) {}
-      return;
-    }
-    try {
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        shouldPlayInBackground: true,
-        interruptionMode: 'mixWithOthers',
-      });
-      const player = createAudioPlayer(ALARM_SOUND_URI);
-      player.loop = true;
-      player.play();
-      soundRef.current = player;
-    } catch (_) {
-      // Fallback: vibration only if expo-audio is unavailable
-    }
-  };
-
-  const triggerAlarm = React.useCallback(() => {
-    setAlarmTime(null);
+  const triggerAlarm = useCallback(() => {
+    solvedHandledRef.current = false;
     setPuzzleKey((k) => k + 1);
     setPuzzleCompleted(false);
     setAlarmActive(true);
     startAlarmSound().catch(() => {});
-  }, []);
-  
+  }, [startAlarmSound]);
 
   useEffect(() => {
     let interval;
@@ -107,21 +148,20 @@ export default function HomeScreen({ navigation }) {
   }, [alarmActive]);
 
   useEffect(() => {
-    if (alarmActive || !alarmTime) return;
+    if (alarmActive || !alarmTime || !alarmEnabled) return;
     const check = () => {
-      const now = new Date();
-      if (now >= alarmTime) triggerAlarm();
+      if (Date.now() < dismissedUntilRef.current) return;
+      if (new Date() >= alarmTime) triggerAlarm();
     };
     checkIntervalRef.current = setInterval(check, 1000);
     return () => {
       if (checkIntervalRef.current) clearInterval(checkIntervalRef.current);
     };
-  }, [alarmActive, alarmTime, triggerAlarm]);
+  }, [alarmActive, alarmTime, alarmEnabled, triggerAlarm]);
 
-  const handleStartAlarmTest = () => {
-    if (alarmActive) return;
-    triggerAlarm();
-  };
+  useEffect(() => {
+    return () => stopAlarm(soundRef, webAudioRef);
+  }, []);
 
   const handleSetAlarm = () => {
     if (alarmActive) return;
@@ -139,6 +179,7 @@ export default function HomeScreen({ navigation }) {
         const now = new Date();
         if (next <= now) next.setDate(next.getDate() + 1);
         setAlarmTime(next);
+        setAlarmEnabled(true);
       }
     }
   };
@@ -150,302 +191,352 @@ export default function HomeScreen({ navigation }) {
     const now = new Date();
     if (d <= now) d.setDate(d.getDate() + 1);
     setAlarmTime(d);
+    setAlarmEnabled(true);
+  };
+
+  const handleToggleAlarm = (value) => {
+    if (value) {
+      if (!alarmTime) handleSetAlarm();
+      else setAlarmEnabled(true);
+    } else {
+      setAlarmEnabled(false);
+    }
   };
 
   const handlePuzzleSolved = useCallback(() => {
+    if (solvedHandledRef.current) return;
+    solvedHandledRef.current = true;
+    dismissedUntilRef.current = Date.now() + 3000;
     setAlarmActive(false);
     setPuzzleCompleted(true);
     Vibration.cancel();
-    stopAlarmSound();
+    stopAlarm(soundRef, webAudioRef);
     incrementPuzzlesSolved();
-    Alert.alert('Puzzle completed', 'Nice work! Your alarm is now off.');
+    setAlarmTime((current) => (current ? getNextAlarmOccurrence(current) : null));
+    Alert.alert('Puzzle Completed', 'Nice work! Your alarm is now off.');
   }, [incrementPuzzlesSolved]);
 
-  useEffect(() => {
-    return () => {
-      stopAlarmSound();
-    };
-  }, []);
+  const streak = Math.max(puzzlesSolved, 1);
 
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.header}>
-        <Text style={styles.appTitle}>Puzzle🧩 ai</Text>
-        <Text style={styles.subtitle}>Alarm that only stops when you solve.</Text>
-      </View>
-
-      <TouchableOpacity
-        style={styles.puzzleTypeChip}
-        onPress={() => navigation.navigate('PuzzleOptions')}
-        activeOpacity={0.85}
-        disabled={alarmActive}
-      >
-        <Text style={styles.puzzleTypeEmoji}>{activePuzzle.emoji}</Text>
-        <View style={styles.puzzleTypeInfo}>
-          <Text style={styles.puzzleTypeLabel}>Active puzzle</Text>
-          <Text style={styles.puzzleTypeName}>{activePuzzle.title}</Text>
-        </View>
-        <Text style={styles.puzzleTypeChange}>Change →</Text>
-      </TouchableOpacity>
-
-      <View style={[styles.alarmCard, flash && alarmActive && styles.alarmCardActive]}>
-        <Text style={styles.alarmLabel}>Alarm status</Text>
-        <Text style={styles.alarmState}>
-          {alarmActive
-            ? 'RINGING – solve the puzzle!'
-            : puzzleCompleted
-            ? 'Puzzle completed ✅'
-            : alarmTime
-            ? `Set for ${formatTime(alarmTime)}`
-            : 'Idle'}
-        </Text>
-        <Text style={styles.alarmHint}>
-          Set an alarm time below. When it goes off, complete your chosen puzzle to stop it.
-        </Text>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.button, alarmActive && styles.buttonDisabled]}
-        onPress={handleSetAlarm}
-        activeOpacity={0.85}
-        disabled={alarmActive}
-      >
-        <Text style={styles.buttonText}>
-          {alarmTime ? 'Change alarm time' : 'Set alarm'}
-        </Text>
-      </TouchableOpacity>
-
-      {alarmTime && !alarmActive && (
-        <TouchableOpacity
-          style={styles.secondaryButton}
-          onPress={() => setAlarmTime(null)}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.secondaryButtonText}>Clear alarm</Text>
-        </TouchableOpacity>
-      )}
-
-      <TouchableOpacity
-        style={[styles.testButton, alarmActive && styles.buttonDisabled]}
-        onPress={handleStartAlarmTest}
-        activeOpacity={0.85}
-        disabled={alarmActive}
-      >
-        <Text style={styles.testButtonText}>Test alarm now</Text>
-      </TouchableOpacity>
-
-      {showTimePicker && (
-        <>
-          <DateTimePicker
-            value={pickerValue}
-            mode="time"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={onTimePick}
-          />
-          {Platform.OS === 'ios' && (
-            <TouchableOpacity style={styles.doneButton} onPress={confirmTimeIOS}>
-              <Text style={styles.doneButtonText}>Done</Text>
-            </TouchableOpacity>
-          )}
-        </>
-      )}
-
-      <View style={styles.puzzleSection}>
-        <Text style={styles.puzzleTitle}>Wake-up puzzle</Text>
-        <Text style={styles.puzzleDescription}>{activePuzzle.description}</Text>
-        <View style={styles.puzzleWrapper}>
-          {alarmActive ? (
+  if (alarmActive) {
+    return (
+      <ScreenBackground>
+        <View style={styles.alarmOverlay}>
+          <View style={[styles.alarmBanner, flash && styles.alarmBannerFlash]}>
+            <Text style={styles.alarmBannerTitle}>Alarm Ringing</Text>
+            <Text style={styles.alarmBannerSub}>Solve the puzzle to turn it off</Text>
+          </View>
+          <DashboardCard style={styles.puzzleCard}>
             <PuzzleRenderer
               key={`${selectedPuzzleType}-${puzzleKey}`}
               type={selectedPuzzleType}
               onSolved={handlePuzzleSolved}
             />
-          ) : (
-            <Text style={styles.idleText}>
-              Set an alarm or tap “Test alarm now” to unlock the puzzle.
-            </Text>
-          )}
+          </DashboardCard>
         </View>
-        {puzzleCompleted && !alarmActive && (
-          <Text style={styles.completedText}>
-            Puzzle completed. Alarm turned off – you beat Puzzle🧩 ai.
-          </Text>
+      </ScreenBackground>
+    );
+  }
+
+  return (
+    <ScreenBackground>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.greeting}>{getGreeting()} 👋</Text>
+        <Text style={styles.userName}>Alex</Text>
+        <View style={styles.streakBadge}>
+          <Text style={styles.streakText}>🔥 {streak}-day streak</Text>
+        </View>
+
+        <TouchableOpacity activeOpacity={0.9} onPress={handleSetAlarm}>
+          <DashboardCard variant="hero" style={styles.heroCard}>
+            <View style={styles.heroTop}>
+              <Text style={styles.heroLabel}>Next alarm</Text>
+              <Switch
+                value={alarmEnabled && !!alarmTime}
+                onValueChange={handleToggleAlarm}
+                trackColor={{ false: 'rgba(255,255,255,0.25)', true: 'rgba(255,255,255,0.5)' }}
+                thumbColor="#ffffff"
+              />
+            </View>
+            <Text style={styles.heroTime}>{formatTime(alarmTime)}</Text>
+            <Text style={styles.heroSub}>{getAlarmSubtext(alarmTime)}</Text>
+            <TouchableOpacity
+              style={styles.heroPill}
+              onPress={() => navigation.navigate('PuzzleOptions')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.heroPillText}>
+                ▦ {activePuzzle.title} · {activePuzzle.difficulty}
+              </Text>
+            </TouchableOpacity>
+          </DashboardCard>
+        </TouchableOpacity>
+
+        {showTimePicker && (
+          <DashboardCard style={styles.pickerCard}>
+            <DateTimePicker
+              value={pickerValue}
+              mode="time"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={onTimePick}
+              themeVariant="dark"
+            />
+            {Platform.OS === 'ios' && (
+              <PrimaryButton title="Done" onPress={confirmTimeIOS} style={styles.doneBtn} />
+            )}
+          </DashboardCard>
         )}
-      </View>
-    </ScrollView>
+
+        <Text style={styles.sectionTitle}>This week</Text>
+        <View style={styles.statsRow}>
+          <StatCard value={puzzlesSolved} label={'Alarms\nsolved'} />
+          <StatCard value="48s" label={'Avg solve\ntime'} />
+          <StatCard value="94%" label={'On-time\nrate'} />
+        </View>
+
+        <Text style={styles.sectionTitle}>Puzzle progress</Text>
+        <View style={styles.progressList}>
+          {PUZZLE_OPTIONS.map((option) => {
+            const { progress, level } = getPuzzleProgress(
+              option.id,
+              puzzlesSolved,
+              selectedPuzzleType
+            );
+            return (
+              <TouchableOpacity
+                key={option.id}
+                onPress={() => navigation.navigate('PuzzleOptions')}
+                activeOpacity={0.85}
+              >
+                <ProgressRow
+                  option={option}
+                  progress={progress}
+                  level={level}
+                  isActive={option.id === selectedPuzzleType}
+                />
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <PrimaryButton
+          title="Test Alarm Now"
+          variant="secondary"
+          onPress={triggerAlarm}
+          style={styles.testBtn}
+        />
+
+        {puzzleCompleted && (
+          <Text style={styles.completedBanner}>Last alarm solved successfully</Text>
+        )}
+      </ScrollView>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#020617',
-  },
   content: {
-    paddingHorizontal: 20,
-    paddingTop: 50,
-    paddingBottom: 32,
+    paddingHorizontal: layout.screenPadding,
+    paddingTop: layout.screenTop,
+    paddingBottom: layout.screenBottom,
   },
-  header: {
-    marginBottom: 16,
+  greeting: {
+    color: colors.textMuted,
+    fontSize: 15,
   },
-  puzzleTypeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0f172a',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#1e293b',
-  },
-  puzzleTypeEmoji: {
-    fontSize: 28,
-    marginRight: 12,
-  },
-  puzzleTypeInfo: {
-    flex: 1,
-  },
-  puzzleTypeLabel: {
-    color: '#64748b',
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  puzzleTypeName: {
-    color: '#f1f5f9',
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  puzzleTypeChange: {
-    color: '#22c55e',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  appTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#f4f4f5',
-  },
-  subtitle: {
-    marginTop: 6,
-    color: '#9ca3af',
-    fontSize: 14,
-  },
-  alarmCard: {
-    backgroundColor: '#0f172a',
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#1f2937',
-  },
-  alarmCardActive: {
-    borderColor: '#f97316',
-    backgroundColor: '#111827',
-  },
-  alarmLabel: {
-    color: '#9ca3af',
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  alarmState: {
+  userName: {
+    color: colors.text,
+    fontSize: 32,
+    fontWeight: '800',
     marginTop: 4,
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#f9fafb',
+    marginBottom: 12,
   },
-  alarmHint: {
-    marginTop: 8,
-    color: '#9ca3af',
-    fontSize: 13,
-  },
-  button: {
-    marginTop: 20,
-    backgroundColor: '#22c55e',
-    paddingVertical: 14,
+  streakBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.streakBg,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  buttonDisabled: {
-    backgroundColor: '#16a34a',
-  },
-  buttonText: {
-    color: '#020617',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  secondaryButton: {
-    marginTop: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  secondaryButtonText: {
-    color: '#9ca3af',
-    fontSize: 14,
-  },
-  testButton: {
-    marginTop: 4,
-    backgroundColor: '#1e3a5f',
-    paddingVertical: 12,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  testButtonText: {
-    color: '#93c5fd',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  puzzleSection: {
-    marginTop: 24,
-  },
-  puzzleTitle: {
-    color: '#e5e7eb',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  puzzleDescription: {
-    color: '#9ca3af',
-    fontSize: 13,
-    marginBottom: 16,
-  },
-  puzzleWrapper: {
-    minHeight: 280,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-  },
-  idleText: {
-    color: '#6b7280',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  completedText: {
-    marginTop: 16,
     marginBottom: 24,
-    color: '#22c55e',
+  },
+  streakText: {
+    color: colors.streak,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  heroCard: {
+    marginBottom: 28,
+  },
+  heroTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  heroLabel: {
+    color: 'rgba(255,255,255,0.85)',
     fontSize: 14,
-    textAlign: 'center',
     fontWeight: '500',
   },
-  doneButton: {
-    marginTop: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: '#22c55e',
-    borderRadius: 12,
+  heroTime: {
+    color: colors.text,
+    fontSize: 52,
+    fontWeight: '800',
+    letterSpacing: -1,
   },
-  doneButtonText: {
-    color: '#020617',
-    fontSize: 16,
+  heroSub: {
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 14,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  heroPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  heroPillText: {
+    color: colors.text,
+    fontSize: 13,
     fontWeight: '600',
+  },
+  pickerCard: {
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  doneBtn: {
+    marginTop: 12,
+    width: '100%',
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 14,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 28,
+  },
+  statCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 18,
+    paddingHorizontal: 8,
+  },
+  statValue: {
+    color: colors.text,
+    fontSize: 26,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  statLabel: {
+    color: colors.textMuted,
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 15,
+  },
+  progressList: {
+    gap: 12,
+    marginBottom: 20,
+  },
+  progressCard: {
+    padding: 14,
+  },
+  progressActive: {
+    borderColor: colors.primary,
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  progressIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  progressIconText: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  progressInfo: {
+    flex: 1,
+  },
+  progressTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  progressDesc: {
+    color: colors.textDim,
+    fontSize: 12,
+  },
+  progressLevel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  progressBarBg: {
+    height: 4,
+    backgroundColor: colors.border,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  testBtn: {
+    marginBottom: 12,
+  },
+  completedBanner: {
+    textAlign: 'center',
+    color: colors.success,
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 8,
+  },
+  alarmOverlay: {
+    flex: 1,
+    paddingHorizontal: layout.screenPadding,
+    paddingTop: layout.screenTop,
+    paddingBottom: layout.screenBottom,
+  },
+  alarmBanner: {
+    backgroundColor: colors.primary,
+    borderRadius: radii.card,
+    padding: 20,
+    marginBottom: 20,
+    alignItems: 'center',
+  },
+  alarmBannerFlash: {
+    backgroundColor: colors.primaryDark,
+  },
+  alarmBannerTitle: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  alarmBannerSub: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  puzzleCard: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 320,
   },
 });

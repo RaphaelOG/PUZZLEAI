@@ -92,11 +92,11 @@ const styles = StyleSheet.create({
   },
   problemCard: {
     width: '100%',
-    backgroundColor: '#0f172a',
-    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 16,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
   },
   problemLabel: {
@@ -115,7 +115,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 28,
     fontWeight: '600',
-    color: '#38bdf8',
+    color: '#60a5fa',
     minHeight: 36,
   },
   answerError: {
@@ -138,15 +138,15 @@ const styles = StyleSheet.create({
     width: 70,
     height: 52,
     borderRadius: 14,
-    backgroundColor: '#1e293b',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   keyClear: {
-    backgroundColor: '#334155',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
   },
   keySubmit: {
-    backgroundColor: '#38bdf8',
+    backgroundColor: '#2563eb',
   },
   keyText: {
     color: '#f1f5f9',
@@ -154,6 +154,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   keyTextAccent: {
-    color: '#020617',
+    color: '#ffffff',
   },
 });
