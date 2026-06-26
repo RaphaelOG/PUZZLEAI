@@ -2,9 +2,11 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PuzzlesSolvedProvider } from './context/PuzzlesSolvedContext';
 import { PuzzleSettingsProvider } from './context/PuzzleSettingsContext';
+import { initializeAlarmAudio } from './utils/alarmAudio';
 import AppTabBar from './components/AppTabBar';
 import LandingScreen from './screens/LandingScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -41,6 +43,10 @@ function MainTabs() {
 }
 
 export default function App() {
+  useEffect(() => {
+    initializeAlarmAudio().catch(() => {});
+  }, []);
+
   return (
     <SafeAreaProvider>
       <PuzzlesSolvedProvider>

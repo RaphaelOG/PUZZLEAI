@@ -13,14 +13,15 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import ScreenBackground from '../components/ScreenBackground';
 import DashboardCard from '../components/DashboardCard';
+import AlarmNotification from '../components/AlarmNotification';
 import { PrimaryButton } from '../components/PrimaryButton';
 import PuzzleRenderer from '../components/PuzzleRenderer';
 import { getAlarmSound } from '../constants/alarmSounds';
 import { PUZZLE_OPTIONS, getPuzzleOption } from '../constants/puzzleTypes';
-import { colors, layout, puzzleColors, radii } from '../constants/theme';
+import { colors, layout, puzzleColors } from '../constants/theme';
 import { usePuzzleSettings } from '../context/PuzzleSettingsContext';
 import { usePuzzlesSolved } from '../context/PuzzlesSolvedContext';
-import { playLoopingAlarm, stopAlarm } from '../utils/alarmAudio';
+import { playLoopingAlarm, stopAlarm, initializeAlarmAudio } from '../utils/alarmAudio';
 
 function formatTime(date) {
   if (!date) return '--:--';
@@ -123,6 +124,7 @@ export default function HomeScreen({ navigation }) {
   const dismissedUntilRef = useRef(0);
 
   const startAlarmSound = useCallback(async () => {
+    await initializeAlarmAudio();
     await playLoopingAlarm(activeAlarmSound.source, soundRef, webAudioRef);
   }, [activeAlarmSound.source]);
 
@@ -131,7 +133,12 @@ export default function HomeScreen({ navigation }) {
     setPuzzleKey((k) => k + 1);
     setPuzzleCompleted(false);
     setAlarmActive(true);
-    startAlarmSound().catch(() => {});
+    startAlarmSound().catch(() => {
+      Alert.alert(
+        'Alarm sound unavailable',
+        'The alarm is active, but audio could not be played. Check your device volume and try again.'
+      );
+    });
   }, [startAlarmSound]);
 
   useEffect(() => {
@@ -213,7 +220,6 @@ export default function HomeScreen({ navigation }) {
     stopAlarm(soundRef, webAudioRef);
     incrementPuzzlesSolved();
     setAlarmTime((current) => (current ? getNextAlarmOccurrence(current) : null));
-    Alert.alert('Puzzle Completed', 'Nice work! Your alarm is now off.');
   }, [incrementPuzzlesSolved]);
 
   const streak = Math.max(puzzlesSolved, 1);
@@ -222,11 +228,14 @@ export default function HomeScreen({ navigation }) {
     return (
       <ScreenBackground>
         <View style={styles.alarmOverlay}>
-          <View style={[styles.alarmBanner, flash && styles.alarmBannerFlash]}>
-            <Text style={styles.alarmBannerTitle}>Alarm Ringing</Text>
-            <Text style={styles.alarmBannerSub}>Solve the puzzle to turn it off</Text>
-          </View>
+          <AlarmNotification
+            flash={flash}
+            soundName={activeAlarmSound.name}
+            puzzleTitle={activePuzzle.title}
+            puzzleDifficulty={activePuzzle.difficulty}
+          />
           <DashboardCard style={styles.puzzleCard}>
+            <Text style={styles.puzzlePrompt}>Wake-up challenge</Text>
             <PuzzleRenderer
               key={`${selectedPuzzleType}-${puzzleKey}`}
               type={selectedPuzzleType}
@@ -330,7 +339,12 @@ export default function HomeScreen({ navigation }) {
         />
 
         {puzzleCompleted && (
-          <Text style={styles.completedBanner}>Last alarm solved successfully</Text>
+          <DashboardCard variant="active" style={styles.completedCard}>
+            <Text style={styles.completedTitle}>Alarm dismissed</Text>
+            <Text style={styles.completedBanner}>
+              Nice work — your last alarm was solved successfully.
+            </Text>
+          </DashboardCard>
         )}
       </ScrollView>
     </ScreenBackground>
@@ -500,12 +514,21 @@ const styles = StyleSheet.create({
   testBtn: {
     marginBottom: 12,
   },
+  completedCard: {
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  completedTitle: {
+    color: colors.success,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
   completedBanner: {
     textAlign: 'center',
-    color: colors.success,
+    color: colors.textMuted,
     fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 8,
+    lineHeight: 20,
   },
   alarmOverlay: {
     flex: 1,
@@ -513,25 +536,14 @@ const styles = StyleSheet.create({
     paddingTop: layout.screenTop,
     paddingBottom: layout.screenBottom,
   },
-  alarmBanner: {
-    backgroundColor: colors.primary,
-    borderRadius: radii.card,
-    padding: 20,
-    marginBottom: 20,
-    alignItems: 'center',
-  },
-  alarmBannerFlash: {
-    backgroundColor: colors.primaryDark,
-  },
-  alarmBannerTitle: {
-    color: colors.text,
-    fontSize: 22,
-    fontWeight: '800',
-  },
-  alarmBannerSub: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 14,
-    marginTop: 4,
+  puzzlePrompt: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 16,
+    alignSelf: 'center',
   },
   puzzleCard: {
     flex: 1,
